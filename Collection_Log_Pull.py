@@ -2,6 +2,13 @@ import os
 import requests
 import concurrent.futures
 
+import datetime
+
+# Returns the current date as a string in dd/mm/yyyy format
+def get_current_date_string():
+  today = datetime.date.today()
+  return today.strftime("%d/%m/%Y")
+
 # Get the directory of the currently executing script
 script_directory = os.path.dirname(os.path.abspath(__file__))
 
@@ -76,7 +83,7 @@ sorted_data = sorted(cloggers, key=lambda x: x["uniqueObtained"], reverse=True)
 # Create counter for 'Ranks'
 count = 1
 # Create output string
-output_string = ""
+output_string = f"Last updated {get_current_date_string()}\n\n"
 # Build formatted string, appending each users data by rank
 for data in sorted_data:
     individual_string = f"Rank {count} - {data['name']}: {data['uniqueObtained']}/{data['uniqueItems']} ({data['accountType']})\n---\n"
@@ -85,7 +92,7 @@ for data in sorted_data:
 
 #Attach any errors to the end of the output_string
 if errorString:
-    output_string += f"\n\n Errors:\n{errorString}"
+    output_string += f"\nErrors:\n{errorString}"
 
 # print(output_string)
 
@@ -93,3 +100,5 @@ if errorString:
 file_path = os.path.join(script_directory, "clog_results.txt")
 with open(file_path, "w") as file:
     file.write(output_string)
+
+input("Press Enter to close...")
