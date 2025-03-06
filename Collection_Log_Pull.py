@@ -1,104 +1,102 @@
 import os
-import requests
-import concurrent.futures
-
+import time
 import datetime
+import asyncio
+import aiohttp
 
-# Returns the current date as a string in dd/mm/yyyy format
+output_list_limit = 99 # Can be set to limit the total listed players (eg. 10 will only output top 10)
+names_file_name = "cloggers.txt"
+output_file_name = "clog_results.txt"
+
+# Gets current date and returns in format DD/MM/YYYY
 def get_current_date_string():
-  today = datetime.date.today()
-  return today.strftime("%d/%m/%Y")
+    return datetime.date.today().strftime("%d/%m/%Y")
 
-# Get the directory of the currently executing script
-script_directory = os.path.dirname(os.path.abspath(__file__))
+# Outputs a minimum of 1 tab, adding 1 for every 4 rsn and rank characters combined less than the longest name
+def return_tab_imputs(rsn, rank, rsns):
+    max_tabs = 0
+    for n in rsns:
+        if round(len(n) / 4) > max_tabs:
+            max_tabs = round(len(n) / 4)
+    output_length = len(rsn) + len(str(rank))
+    number_of_tabs = max_tabs - round(output_length / 4) + 1
+    # print(f"{output_length} : {number_of_tabs}")
+    return "\t" * number_of_tabs
 
-print(script_directory)
+# Define function to submit and retrieve API response
+async def fetch_data(session, url, rsn):
+    retries = 0
+    max_retries = 5  # Set a maximum number of retries
+    while retries < max_retries:
+        try:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    return rsn, await response.json()
+                elif response.status == 503:
+                    retries += 1
+                    wait_time = 1 ** retries  # Exponential backoff
+                    time.sleep(wait_time)  # Wait before retrying
+                    print(f"Error ({response.status}): Server busy; Retrying for {rsn} (Attempt {retries}/{max_retries})")
+                else:
+                    print(f"Error ({response.status}) fetching {rsn} from official leaderboards: Wrong name or not ranked")
+                    return rsn, None
+        except aiohttp.ClientError as e:
+            print(f"Client error fetching {rsn} from {url}: {e}")
+            return rsn, None
+        except Exception as e:
+            print(f"An unexpected error occurred: {e}")
+            return rsn, None
 
-# Define a function to make the API request
-def fetch_data(url):
-    response = requests.get(url)
-    return response.json()
+# Returns result of API response in a dictionary format
+async def process_requests(api_urls):
+    async with aiohttp.ClientSession() as session:
+        tasks = [fetch_data(session, url, rsn) for url, rsn in api_urls]
+        results = await asyncio.gather(*tasks)
+        return {rsn: data for rsn, data in results if data}
 
-# Initialize an empty array for logging clogger data
-cloggers = []
+async def main():
+    script_directory = os.path.dirname(os.path.abspath(__file__))
+    cloggers = []
+    #Get names from file for processing
+    with open(os.path.join(script_directory, names_file_name), "r") as file:
+        rsns = [line.strip() for line in file]
+        # print(rsns)
 
-# Initialize an empty array for API calls
-api_urls = []
+    # Set API urls with player names
+    api_urls = [(f"https://secure.runescape.com/m=hiscore_oldschool/index_lite.json?player={rsn}", rsn) for rsn in rsns]
 
-# Error output string (Searching a name that doesn't exist etc)
-errorString = ""
+    matched_data = await process_requests(api_urls)
 
-# Open the text file for reading
-file_path = os.path.join(script_directory, "cloggers.txt")
-with open(file_path, "r") as file:
-    # Read each line from the file
-    for line in file:
-        # Remove leading and trailing whitespace and append the word to the array
-        name = line.strip()
-        # Create API_URL's
-        api_urls.append(f"https://api.collectionlog.net/collectionlog/user/{name}")
+    # Pull official Collection Log info and split into RSN and Clogs obtained
+    for rsn, data in matched_data.items():
+        cloggers.append({
+            "name": rsn,
+            "uniqueObtained": data["activities"][18]["score"]
+        })
 
-# Create a ThreadPoolExecutor for parallel execution
-with concurrent.futures.ThreadPoolExecutor() as executor:
-    # Submit API requests in parallel and store the futures
-    futures = [executor.submit(fetch_data, url) for url in api_urls]
+    # Sort from highest collections obtained to lowest
+    sorted_data = sorted(cloggers, key=lambda x: x.get("uniqueObtained", 0), reverse=True) #Handle potential missing uniqueObtained
 
-# Process the results as they become available
-for future in concurrent.futures.as_completed(futures):
-    try:
-        response_data = future.result()
-        if "error" in response_data:
-            print("API Error:", response_data["error"])
-            errorString += f"{response_data['error']}\n"
+    # Format string for output. 
+    output_string = f"Last updated {get_current_date_string()}\n\n"
+    output_string_unranked = "\nThe following are not ranked on the official highscores:\n"
+    for i, data in enumerate(sorted_data):
+        obtained = data.get("uniqueObtained")
+        if obtained != -1:
+            output_string += f"Rank {i+1} - {data['name']}: {return_tab_imputs(data['name'], i, rsns)}{obtained}\n---\n"
         else:
-            #Add Account type and Log count to list
-            clogger_object = {
-                "name": response_data["collectionLog"]["username"],
-                "accountType": response_data["collectionLog"]["accountType"],
-                "uniqueItems": response_data["collectionLog"]["uniqueItems"],
-                "uniqueObtained": response_data["collectionLog"]["uniqueObtained"]
-            }
-            # Truncate account type to minimise output spilling onto new line, particularly on Discord mobile
-            match clogger_object["accountType"]:
-                case "IRONMAN":
-                    clogger_object["accountType"] = "IRONMAN"
-                case "HARDCORE_IRONMAN":
-                    clogger_object["accountType"] = "HC_IRONMAN"
-                case "GROUP_IRONMAN":
-                    clogger_object["accountType"] = "GIM"
-                case "HARDCORE_GROUP_IRONMAN":
-                    clogger_object["accountType"] = "HC_GIM"
-                case "ULTIMATE_IRONMAN":
-                    clogger_object["accountType"] = "UIM"
-                case _:
-                    clogger_object["accountType"] = "NORMAL"
-            # Append to list
-            cloggers.append(clogger_object)
-    except Exception as e:
-        print(f"Error for {e}")
+            output_string_unranked += f" - {data['name']}\n"
+        if i == output_list_limit:
+            break
+    # Combine output strings
+    output_string += output_string_unranked
 
-# Sort the "cloggers" array of objects by the "uniqueObtained" key in descending order
-sorted_data = sorted(cloggers, key=lambda x: x["uniqueObtained"], reverse=True)
+    # Write formated string to text file
+    with open(os.path.join(script_directory, output_file_name), "w") as file:
+        file.write(output_string)
+        print("File output completed")
+    # print(output_string)
 
-# Create counter for 'Ranks'
-count = 1
-# Create output string
-output_string = f"Last updated {get_current_date_string()}\n\n"
-# Build formatted string, appending each users data by rank
-for data in sorted_data:
-    individual_string = f"Rank {count} - {data['name']}: {data['uniqueObtained']}/{data['uniqueItems']} ({data['accountType']})\n---\n"
-    output_string += individual_string
-    count = count + 1
-
-#Attach any errors to the end of the output_string
-if errorString:
-    output_string += f"\nErrors:\n{errorString}"
-
-# print(output_string)
-
-# Save the output string to a text file
-file_path = os.path.join(script_directory, "clog_results.txt")
-with open(file_path, "w") as file:
-    file.write(output_string)
-
-input("Press Enter to close...")
+if __name__ == "__main__":
+    asyncio.run(main())
+    input("Press Enter to close...") # Keeps window open to show any potential error messages

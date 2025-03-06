@@ -1,5 +1,5 @@
 # OSRS-CLog_leaderboard
-Pulls information about users from collectionlog.net API and outputs in a leaderboard format
+Pulls collection log information from official highscores API and outputs in a leaderboard format
 
 Install Python if needed:
 
@@ -8,7 +8,7 @@ Install Python if needed:
 
 To install the Requests module via CMD or Powershell:
 
-```python -m pip install requests```
+```python -m pip install aiohttp```
 
 Update cloggers.txt with all the usernames you want to check for. eg
 ```
